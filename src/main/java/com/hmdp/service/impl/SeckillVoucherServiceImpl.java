@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.LockImpl;
 import com.hmdp.utils.UniqueIdGenerator;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -33,6 +35,8 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
     private UniqueIdGenerator uniqueIdGenerator;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private RedissonClient redissonClient;
     public Result seckillVoucher(Long id){
         //1.根据id从数据库中查询对应的优惠券
         SeckillVoucher seckillVoucher = getById(id);
@@ -50,8 +54,10 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
         }
 
         Long userId = UserHolder.getUser().getId();
-        LockImpl lock = new LockImpl("order:" + userId, stringRedisTemplate);
-        if(!lock.tryLock(5L)){
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+        //可以设置锁的重试时间(默认为-1表示不允许重试)、超时时间(默认30分钟)
+        boolean isLock = lock.tryLock();
+        if(!isLock){
             return Result.fail("每个用户只能购买一次");
         }
         try {
@@ -60,8 +66,20 @@ public class SeckillVoucherServiceImpl extends ServiceImpl<SeckillVoucherMapper,
             return currentProxy.createVoucherOrder(id);
         } finally {
             //释放锁
-            lock.unLock();
+            lock.unlock();
         }
+//        LockImpl lock = new LockImpl("order:" + userId, stringRedisTemplate);
+//        if(!lock.tryLock(5L)){
+//            return Result.fail("每个用户只能购买一次");
+//        }
+//        try {
+//            //获取代理对象，避免自身调用导致事务失效
+//            ISeckillVoucherService currentProxy = (ISeckillVoucherService) AopContext.currentProxy();
+//            return currentProxy.createVoucherOrder(id);
+//        } finally {
+//            //释放锁
+//            lock.unLock();
+//        }
     }
     @Transactional
     public Result createVoucherOrder(Long id){
